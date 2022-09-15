@@ -9,6 +9,10 @@
 #include "wasm_opcode.h"
 #include "wasm_loader.h"
 #include "../common/wasm_exec_env.h"
+// add z
+#include <assert.h>
+#include "wasm.h"
+//
 #if WASM_ENABLE_SHARED_MEMORY != 0
 #include "../common/wasm_shared_memory.h"
 #endif
@@ -1050,7 +1054,8 @@ get_global_addr(uint8 *global_data, WASMGlobalInstance *global)
                : global_data + global->data_offset;
 #endif
 }
-
+void
+write_data(WASMModuleInstance *module, WASMInterpFrame *frame, uint32 *frame_sp, uint32 ret_num);
 static void
 wasm_interp_call_func_bytecode(WASMModuleInstance *module,
                                WASMExecEnv *exec_env,
@@ -2580,7 +2585,7 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
             /* numberic instructions of f32 */
             HANDLE_OP(WASM_OP_F32_ABS)
             {
-                DEF_OP_MATH(float32, F32, fabs);
+                DEF_OP_MATH(float32, F32, fabsf);
                 HANDLE_OP_END();
             }
 
@@ -3828,6 +3833,8 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
 
     return_func:
     {
+        // if (!prev_frame->ip)
+        //     write_data(module, frame, frame_sp, (uint32)cur_func->ret_cell_num);
         FREE_FRAME(exec_env, frame);
         wasm_exec_env_set_cur_frame(exec_env, (WASMRuntimeFrame *)prev_frame);
 
@@ -4005,4 +4012,167 @@ wasm_interp_call_wasm(WASMModuleInstance *module_inst, WASMExecEnv *exec_env,
 
     wasm_exec_env_set_cur_frame(exec_env, prev_frame);
     FREE_FRAME(exec_env, frame);
+}
+
+// add z ----- * -----
+
+void
+write_path_to_file(char *filename, char *content)
+{
+    FILE *fp = NULL;
+    fp = fopen(filename, "w+");
+    fputs(content, fp);
+    fclose(fp);
+}
+
+void
+read_path_from_file(char *filename, char *target_buffer)
+{
+    FILE *fp = NULL;
+    fp = fopen(filename, "r");
+    fscanf(fp, "%s", target_buffer);
+    fclose(fp);
+}
+
+void
+write_typed_data(uint8 ty, void *data_ptr, FILE *fp)
+{
+    switch (ty) {
+        case VALUE_TYPE_EXTERNREF:
+        case VALUE_TYPE_FUNCREF:
+        case VALUE_TYPE_I32:
+        case VALUE_TYPE_F32:
+            fwrite(data_ptr, sizeof(uint32), 1, fp);
+            break;
+        case VALUE_TYPE_I64:
+        case VALUE_TYPE_F64:
+            fwrite(data_ptr, sizeof(uint64), 1, fp);
+            break;
+        default:
+            assert(0);
+    }
+}
+
+void
+write_data(WASMModuleInstance *module, WASMInterpFrame *frame, uint32 *frame_sp, uint32 ret_num)
+{
+    // get FILE
+    char real_path_write_data[100];
+    char *the_file_save_target_data_path =
+        "/home/zph/DGit/wasm_projects/wasm-micro-runtime/the_file_save_target_path";
+    read_path_from_file(the_file_save_target_data_path, real_path_write_data);
+    FILE *fp = fopen(real_path_write_data, "wb");
+
+    // global
+    uint32 global_count = module->global_count; // 假设只有8个
+    uint8 *global_data = module->global_data;
+    uint8 *global_addr;
+    uint8 global_type;
+    WASMGlobalInstance *global;
+    WASMGlobalInstance *globals_base = module->globals;
+    // TODO write global count
+    uint32 global_index;
+    bool global_mutable;
+    WASMValue global_value;
+    // type sequence to check
+    uint8 global_types_to_check[global_count];
+    fwrite(&global_count, sizeof(uint32), 1, fp);
+    // fwrite(&i, sizeof(int), 1, fp);
+
+    for (global_index = 0; global_index < global_count; global_index++) {
+        global = globals_base + global_index;
+        global_type = global->type;
+        global_addr = get_global_addr(global_data, global);
+        global_types_to_check[global_index] = global_type;
+        // write type
+        fwrite(&global_type, sizeof(uint8), 1, fp);
+        write_typed_data(global_type, global_addr, fp);
+    }
+    // Table
+    WASMTableInstance *table_inst;
+    uint32 table_idx, elem_idx;
+    uint32 table_count = module->table_count;
+    fwrite(&table_count, sizeof(uint32), 1, fp);
+    WASMTableInstance **tables = module->tables;
+    uint32 table_cur_size;
+    void *table_base_addr;
+    for (table_idx = 0; table_idx < table_count; table_idx++) {
+        // tables适用于有多于一个table的情况
+        table_inst = *(tables + table_idx);
+        table_cur_size = table_inst->cur_size;
+        fwrite(&table_cur_size, sizeof(uint32), 1, fp);
+        for (elem_idx = 0; elem_idx < table_cur_size; elem_idx++) {
+            // TODO table看着比较奇怪，unit8
+            // base_addr[1]会不会带来过界什么的问题。
+            table_base_addr = ((uint32 *)(table_inst->base_addr)) + elem_idx;
+            fwrite(((uint32 *)(table_inst->base_addr)) + elem_idx,
+                   sizeof(uint32), 1, fp);
+        }
+    }
+    // printf("table_count:%d\n", table_count);
+    // para + local
+    uint8 local_type;
+    uint32 local_data;
+    uint32 local_idx, local_offset;
+    uint32 *frame_ptr;
+    uint32 param_count = frame->function->param_count;
+    uint32 local_count = frame->function->local_count;
+    uint32 param_local_sum = param_count + local_count;
+    fwrite(&param_local_sum, sizeof(uint32), 1, fp);
+    for (local_idx = 0; local_idx < param_local_sum; local_idx++) {
+        // local_offset = frame->lp+local_idx;
+        if (local_idx < param_count)
+            local_type = frame->function->param_types[local_idx];
+        else
+            local_type = frame->function->local_types[local_idx - param_count];
+        fwrite(&local_type, sizeof(uint8), 1, fp);
+
+        local_offset = frame->function->local_offsets[local_idx];
+        frame_ptr = frame->lp + local_offset;
+        write_typed_data(local_type, frame_ptr, fp);
+    }
+    // stack
+    uint32 *frame_spb = frame->sp_bottom;
+    uint32 i;
+    uint32 sp_word;
+    // TODO 临时搓的，可能不对
+    // stack_len这个名字是有歧义的，这个时候，如果实现没出搓，栈顶和栈底应该是指向相同地方的
+    uint32 ret_cell_num = ret_num;
+    fwrite(&ret_cell_num, sizeof(uint32), 1, fp);
+    // printf("frame_sp-frame_spb : %d\n", frame_sp-frame_spb);
+    for (i = 0; i < ret_cell_num; i++) {
+        sp_word = frame_sp[i];
+        // TODO
+        
+        // printf("%d\n", sp_word);
+        fwrite(frame_sp+i, sizeof(uint32), 1, fp);
+    }
+    
+    // memory
+    // 要么只写一个？
+    uint32 memory_count = module->memory_count;
+    // write memory count
+    fwrite(&memory_count, sizeof(uint32), 1, fp);
+
+    // WASMMemoryInstance *memories_base = module->memories;
+    WASMMemoryInstance *memory = module->default_memory;
+    uint8 *maddr = memory->memory_data;
+    // maddr_end应该是非常大的，后面那个size应该是比较小的，比如64k
+    uint8 *maddr_end = memory->memory_data_end;
+    uint64 linear_mem_size =
+        memory->num_bytes_per_page * memory->cur_page_count;
+    uint32 cur_page_count = memory->cur_page_count;
+    fwrite(&linear_mem_size, sizeof(uint64), 1, fp);
+    fwrite(&cur_page_count, sizeof(uint32), 1, fp);
+    // printf("linear_mem_size: %zd", linear_mem_size);
+    // printf("memory->num_bytes_per_page: %d\n", memory->num_bytes_per_page);
+    // printf("DEFAULT_NUM_BYTES_PER_PAGE: %d\n", DEFAULT_NUM_BYTES_PER_PAGE);
+    // printf(" memory->cur_page_count: %d\n",  memory->cur_page_count);
+    // printf("%d\n", memory->heap_data_end - memory->heap_data);
+    // DEFAULT_NUM_BYTES_PER_PAGE
+    // TODO 目前猜测应该不会用到heap的信息，应该至少实现的
+    // TODO memory还有其他可以拿的数据，具体看结构体
+    // memories应该是不会用到了。
+    fwrite(maddr, 1, linear_mem_size, fp);
+    fclose(fp);
 }
