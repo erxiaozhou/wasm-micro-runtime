@@ -202,6 +202,30 @@ popcount64(uint64 u)
     return ret;
 }
 
+static float
+local_copysignf(float x, float y)
+{
+    union {
+        float f;
+        uint32_t i;
+    } ux = { x }, uy = { y };
+    ux.i &= 0x7fffffff;
+    ux.i |= uy.i & 0x80000000;
+    return ux.f;
+}
+
+static double
+local_copysign(double x, double y)
+{
+    union {
+        double f;
+        uint64_t i;
+    } ux = { x }, uy = { y };
+    ux.i &= -1ULL / 2;
+    ux.i |= uy.i & 1ULL << 63;
+    return ux.f;
+}
+
 static uint64
 read_leb(const uint8 *buf, uint32 *p_offset, uint32 maxbits, bool sign)
 {
@@ -2602,31 +2626,31 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
 
             HANDLE_OP(WASM_OP_F32_CEIL)
             {
-                DEF_OP_MATH(float32, F32, ceil);
+                DEF_OP_MATH(float32, F32, ceilf);
                 HANDLE_OP_END();
             }
 
             HANDLE_OP(WASM_OP_F32_FLOOR)
             {
-                DEF_OP_MATH(float32, F32, floor);
+                DEF_OP_MATH(float32, F32, floorf);
                 HANDLE_OP_END();
             }
 
             HANDLE_OP(WASM_OP_F32_TRUNC)
             {
-                DEF_OP_MATH(float32, F32, trunc);
+                DEF_OP_MATH(float32, F32, truncf);
                 HANDLE_OP_END();
             }
 
             HANDLE_OP(WASM_OP_F32_NEAREST)
             {
-                DEF_OP_MATH(float32, F32, rint);
+                DEF_OP_MATH(float32, F32, rintf);
                 HANDLE_OP_END();
             }
 
             HANDLE_OP(WASM_OP_F32_SQRT)
             {
-                DEF_OP_MATH(float32, F32, sqrt);
+                DEF_OP_MATH(float32, F32, sqrtf);
                 HANDLE_OP_END();
             }
 
@@ -2692,7 +2716,7 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
 
                 b = POP_F32();
                 a = POP_F32();
-                PUSH_F32(signbit(b) ? -fabs(a) : fabs(a));
+                PUSH_F32(local_copysignf(a, b));
                 HANDLE_OP_END();
             }
 
@@ -2806,7 +2830,7 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
 
                 b = POP_F64();
                 a = POP_F64();
-                PUSH_F64(signbit(b) ? -fabs(a) : fabs(a));
+                PUSH_F64(local_copysign(a, b));
                 HANDLE_OP_END();
             }
 
