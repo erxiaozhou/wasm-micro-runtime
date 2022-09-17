@@ -4086,9 +4086,10 @@ write_data(WASMModuleInstance *module, WASMInterpFrame *frame, uint32 *frame_sp,
         "/home/zph/DGit/wasm_projects/wasm-micro-runtime/the_file_save_target_path";
     read_path_from_file(the_file_save_target_data_path, real_path_write_data);
     FILE *fp = fopen(real_path_write_data, "wb");
+    // ! 上面准备简化，搞的太麻烦了，就是定义个要存的文件名
 
     // global
-    uint32 global_count = module->global_count; // 假设只有8个
+    uint32 global_count = module->global_count;
     uint8 *global_data = module->global_data;
     uint8 *global_addr;
     uint8 global_type;
